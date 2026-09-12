@@ -2,7 +2,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::models::{
-    agreement::{Agreement, AgreementEvent, AgreementVersion},
+    agreement::{Agreement, AgreementEvent, AgreementSummary, AgreementVersion},
     agreement_status::AgreementStatus,
 };
 
@@ -272,4 +272,38 @@ pub async fn create_event(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+pub async fn list_all(pool: &PgPool) -> Result<Vec<AgreementSummary>, sqlx::Error> {
+    sqlx::query_as::<_, AgreementSummary>(
+        r#"
+        SELECT 
+            a.id, a.creator_id, a.participant_id, a.status, a.current_version,
+            v.title, v.amount, v.deadline,
+            a.created_at, a.updated_at
+        FROM agreements a
+        JOIN agreement_versions v ON a.id = v.agreement_id AND a.current_version = v.version_number
+        ORDER BY a.updated_at DESC
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn list_by_user(pool: &PgPool, user_id: Uuid) -> Result<Vec<AgreementSummary>, sqlx::Error> {
+    sqlx::query_as::<_, AgreementSummary>(
+        r#"
+        SELECT 
+            a.id, a.creator_id, a.participant_id, a.status, a.current_version,
+            v.title, v.amount, v.deadline,
+            a.created_at, a.updated_at
+        FROM agreements a
+        JOIN agreement_versions v ON a.id = v.agreement_id AND a.current_version = v.version_number
+        WHERE a.creator_id = $1 OR a.participant_id = $1
+        ORDER BY a.updated_at DESC
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
 }

@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::{
     errors::AppError,
     models::{
-        agreement::{AgreementActionRequest, CreateAgreementRequest},
+        agreement::{AgreementActionRequest, CreateAgreementRequest, ListAgreementsQuery},
         revision::ProposeRevisionRequest,
     },
     services::agreement_service,
@@ -28,6 +28,14 @@ pub async fn get_agreement(
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {
     let result = agreement_service::get_detail(&state.db, id).await?;
+    Ok((StatusCode::OK, Json(result)))
+}
+
+pub async fn list_agreements(
+    State(state): State<AppState>,
+    Query(query): Query<ListAgreementsQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    let result = agreement_service::list(&state.db, query.user_id).await?;
     Ok((StatusCode::OK, Json(result)))
 }
 

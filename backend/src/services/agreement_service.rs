@@ -4,7 +4,7 @@ use uuid::Uuid;
 use crate::{
     errors::AppError,
     models::{
-        agreement::{AgreementActionRequest, AgreementDetailResponse, CreateAgreementRequest},
+        agreement::{AgreementActionRequest, AgreementDetailResponse, AgreementSummary, CreateAgreementRequest},
         agreement_status::{AgreementAction, AgreementStatus},
         revision::{AgreementDiff, ProposeRevisionRequest},
     },
@@ -326,4 +326,12 @@ pub async fn get_diff(
         to_v.amount,
         to_v.deadline,
     ))
+}
+
+pub async fn list(pool: &PgPool, user_id: Option<Uuid>) -> Result<Vec<AgreementSummary>, AppError> {
+    let list = match user_id {
+        Some(uid) => agreement_repository::list_by_user(pool, uid).await?,
+        None => agreement_repository::list_all(pool).await?,
+    };
+    Ok(list)
 }

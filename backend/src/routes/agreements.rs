@@ -8,6 +8,7 @@ use crate::{handlers::agreements, state::AppState};
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/agreements", post(agreements::create_agreement))
+        .route("/agreements", get(agreements::list_agreements))
         .route("/agreements/{id}", get(agreements::get_agreement))
         .route("/agreements/{id}/accept", post(agreements::accept_agreement))
         .route("/agreements/{id}/reject", post(agreements::reject_agreement))

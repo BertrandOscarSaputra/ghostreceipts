@@ -66,3 +66,23 @@ pub struct AgreementDetailResponse {
     pub versions: Vec<AgreementVersion>,
     pub events: Vec<AgreementEvent>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct AgreementSummary {
+    pub id: Uuid,
+    pub creator_id: Uuid,
+    pub participant_id: Uuid,
+    pub status: String,
+    pub current_version: i32,
+    pub title: String,
+    pub amount: Option<i64>,
+    pub deadline: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ListAgreementsQuery {
+    pub user_id: Option<Uuid>,
+}
+

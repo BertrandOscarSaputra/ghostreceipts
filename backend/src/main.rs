@@ -65,6 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }))
         }))
         .merge(routes::agreements::router())
+        .merge(routes::users::router())
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         .with_state(state);

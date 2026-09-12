@@ -21,12 +21,19 @@ async fn test_full_agreement_lifecycle_and_revision() {
         .await
         .expect("Failed to connect to test database");
 
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .expect("Failed to apply migrations");
+
+
     // 1. Create Users (Alice = Freelancer, Bob = Client)
     let unique_suffix = Uuid::new_v4().to_string()[..8].to_string();
     let alice = user_service::create_user(
         &pool,
         CreateUserRequest {
             username: format!("alice_{}", unique_suffix),
+            email: None,
             wallet_address: Some(format!("0xAlice{}", unique_suffix)),
         },
     )
@@ -37,11 +44,13 @@ async fn test_full_agreement_lifecycle_and_revision() {
         &pool,
         CreateUserRequest {
             username: format!("bob_{}", unique_suffix),
+            email: None,
             wallet_address: Some(format!("0xBob{}", unique_suffix)),
         },
     )
     .await
     .expect("Failed to create Bob");
+
 
     // 2. Alice creates an agreement with Bob (Rp 500,000, Status: Pending, Version: 1)
     let agreement_detail = agreement_service::create(

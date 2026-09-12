@@ -12,6 +12,10 @@ import {
   getAgreement,
   getOnChainStatus,
   checkHealth,
+  getStoredUser,
+  getStoredToken,
+  clearSession,
+  getMe,
 } from "@/lib/api";
 import { Header } from "@/components/Header";
 import { ReceiptCard } from "@/components/ReceiptCard";
@@ -20,6 +24,7 @@ import { TimelineView } from "@/components/TimelineView";
 import { OnChainBadge } from "@/components/OnChainBadge";
 import { CreateAgreementModal } from "@/components/CreateAgreementModal";
 import { ProposeRevisionModal } from "@/components/ProposeRevisionModal";
+import { AuthModal } from "@/components/AuthModal";
 import {
   Plus,
   Search,
@@ -31,7 +36,8 @@ import {
   DollarSign,
   ChevronRight,
   Shield,
-  Filter
+  Filter,
+  LogIn
 } from "lucide-react";
 
 export default function Home() {
@@ -51,13 +57,14 @@ export default function Home() {
   const [showCreateModal, setShowCreateModal] = useState<boolean>(false);
   const [showRevisionModal, setShowRevisionModal] = useState<boolean>(false);
   const [showDiff, setShowDiff] = useState<boolean>(false);
+  const [showAuthModal, setShowAuthModal] = useState<boolean>(false);
 
   // Loading & Health States
   const [backendHealthy, setBackendHealthy] = useState<boolean>(true);
   const [loadingList, setLoadingList] = useState<boolean>(false);
   const [loadingDetail, setLoadingDetail] = useState<boolean>(false);
 
-  // Initial Load: Health check, Users, Agreements
+  // Initial Load: Health check, Session restoration, Users, Agreements
   const initApp = useCallback(async () => {
     try {
       const healthy = await checkHealth();
@@ -66,8 +73,19 @@ export default function Home() {
       const fetchedUsers = await getUsers();
       setUsers(fetchedUsers);
 
-      // Default user selection: prefer alice_demo if exists, else first
-      if (fetchedUsers.length > 0 && !currentUser) {
+      // Check stored session
+      const storedToken = getStoredToken();
+      const storedUser = getStoredUser();
+
+      if (storedToken && storedUser) {
+        try {
+          const freshUser = await getMe(storedToken);
+          setCurrentUser(freshUser);
+        } catch {
+          setCurrentUser(storedUser);
+        }
+      } else if (fetchedUsers.length > 0 && !currentUser) {
+        // Default to first user for easy exploration if no auth saved
         const alice = fetchedUsers.find((u) => u.username.toLowerCase().includes("alice"));
         setCurrentUser(alice || fetchedUsers[0]);
       }
@@ -95,14 +113,12 @@ export default function Home() {
       const data = await getAgreement(id);
       setDetail(data);
 
-      // Automatically show diff if there are multiple versions or revision is pending
       if (data.versions.length > 1 || data.agreement.status === "RevisionPending") {
         setShowDiff(true);
       } else {
         setShowDiff(false);
       }
 
-      // Load on-chain state
       try {
         const onChainData = await getOnChainStatus(id);
         setOnChain(onChainData);
@@ -144,6 +160,12 @@ export default function Home() {
     setCurrentUser(newUser);
   };
 
+  // Handle Logout
+  const handleLogout = () => {
+    clearSession();
+    setCurrentUser(null);
+  };
+
   // Filter agreements by status and search query
   const filteredAgreements = agreements.filter((ag) => {
     const matchesFilter =
@@ -172,6 +194,8 @@ export default function Home() {
           });
         }}
         onCreateUser={handleCreateUser}
+        onOpenAuthModal={() => setShowAuthModal(true)}
+        onLogout={handleLogout}
         isBackendHealthy={backendHealthy}
       />
 
@@ -191,7 +215,13 @@ export default function Home() {
                 </p>
               </div>
               <button
-                onClick={() => setShowCreateModal(true)}
+                onClick={() => {
+                  if (!currentUser) {
+                    setShowAuthModal(true);
+                  } else {
+                    setShowCreateModal(true);
+                  }
+                }}
                 className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-white text-xs font-semibold shadow-md shadow-cyan-500/20 flex items-center space-x-1.5 transition"
               >
                 <Plus className="w-3.5 h-3.5" />
@@ -242,7 +272,10 @@ export default function Home() {
                     No matching agreements found.
                   </p>
                   <button
-                    onClick={() => setShowCreateModal(true)}
+                    onClick={() => {
+                      if (!currentUser) setShowAuthModal(true);
+                      else setShowCreateModal(true);
+                    }}
                     className="mt-3 text-xs text-cyan-400 hover:underline font-semibold"
                   >
                     Draft your first agreement →
@@ -329,7 +362,10 @@ export default function Home() {
                     setDetail(updated);
                     handleRefresh();
                   }}
-                  onOpenRevisionModal={() => setShowRevisionModal(true)}
+                  onOpenRevisionModal={() => {
+                    if (!currentUser) setShowAuthModal(true);
+                    else setShowRevisionModal(true);
+                  }}
                   onToggleDiff={() => setShowDiff(!showDiff)}
                   showDiff={showDiff}
                 />
@@ -361,7 +397,10 @@ export default function Home() {
                   Select a digital agreement from the list on the left, or create a new agreement to experience the deterministic state machine.
                 </p>
                 <button
-                  onClick={() => setShowCreateModal(true)}
+                  onClick={() => {
+                    if (!currentUser) setShowAuthModal(true);
+                    else setShowCreateModal(true);
+                  }}
                   className="px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-indigo-600 text-white text-xs font-semibold shadow-lg shadow-cyan-500/20"
                 >
                   Create New Agreement
@@ -371,6 +410,22 @@ export default function Home() {
           </section>
         </div>
       </main>
+
+      {/* Authentication Modal */}
+      {showAuthModal && (
+        <AuthModal
+          onClose={() => setShowAuthModal(false)}
+          onSuccess={(user) => {
+            setCurrentUser(user);
+            handleRefresh();
+          }}
+          demoUsers={users}
+          onSelectDemoUser={(user) => {
+            setCurrentUser(user);
+            handleRefresh();
+          }}
+        />
+      )}
 
       {/* Create Agreement Modal */}
       {showCreateModal && currentUser && (

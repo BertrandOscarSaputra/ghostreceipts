@@ -3,8 +3,14 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8088";
 export interface User {
   id: string;
   username: string;
+  email?: string;
   wallet_address?: string;
   created_at: string;
+}
+
+export interface AuthResponse {
+  user: User;
+  token: string;
 }
 
 export interface AgreementSummary {
@@ -95,6 +101,86 @@ export interface OnChainStatusResponse {
   transactions: OnChainTxSummary[];
 }
 
+// Session storage keys
+export const TOKEN_KEY = "ghostreceipt_token";
+export const USER_KEY = "ghostreceipt_user";
+
+export function getStoredToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+export function getStoredUser(): User | null {
+  if (typeof window === "undefined") return null;
+  const raw = localStorage.getItem(USER_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+export function saveSession(token: string, user: User): void {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(TOKEN_KEY, token);
+  localStorage.setItem(USER_KEY, JSON.stringify(user));
+}
+
+export function clearSession(): void {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(USER_KEY);
+}
+
+// Authentication endpoints
+export async function login(identifier: string, password: string): Promise<AuthResponse> {
+  const res = await fetch(`${API_URL}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ identifier, password }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Login failed. Please check your username/email and password.");
+  }
+  const data: AuthResponse = await res.json();
+  saveSession(data.token, data.user);
+  return data;
+}
+
+export async function register(username: string, password: string, email?: string): Promise<AuthResponse> {
+  const res = await fetch(`${API_URL}/auth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      username,
+      password,
+      email: email?.trim() || undefined,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Registration failed. Please check your inputs.");
+  }
+  const data: AuthResponse = await res.json();
+  saveSession(data.token, data.user);
+  return data;
+}
+
+export async function getMe(token?: string): Promise<User> {
+  const authToken = token || getStoredToken();
+  if (!authToken) throw new Error("No active session found");
+  const res = await fetch(`${API_URL}/auth/me`, {
+    headers: { Authorization: `Bearer ${authToken}` },
+  });
+  if (!res.ok) {
+    clearSession();
+    throw new Error("Session expired. Please sign in again.");
+  }
+  return res.json();
+}
+
 export async function checkHealth(): Promise<boolean> {
   try {
     const res = await fetch(`${API_URL}/health`);
@@ -110,11 +196,11 @@ export async function getUsers(): Promise<User[]> {
   return res.json();
 }
 
-export async function createUser(username: string, wallet_address?: string): Promise<User> {
+export async function createUser(username: string, wallet_address?: string, email?: string): Promise<User> {
   const res = await fetch(`${API_URL}/users`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, wallet_address }),
+    body: JSON.stringify({ username, wallet_address, email }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));

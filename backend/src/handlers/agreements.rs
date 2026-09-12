@@ -118,3 +118,11 @@ pub async fn get_diff(
     let result = agreement_service::get_diff(&state.db, id, query.from, query.to).await?;
     Ok((StatusCode::OK, Json(result)))
 }
+
+pub async fn get_on_chain_status(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<impl IntoResponse, AppError> {
+    let result = agreement_service::get_on_chain_status(&state.db, id).await?;
+    Ok((StatusCode::OK, Json(result)))
+}

@@ -4,11 +4,15 @@ use uuid::Uuid;
 use crate::{
     errors::AppError,
     models::{
-        agreement::{AgreementActionRequest, AgreementDetailResponse, AgreementSummary, CreateAgreementRequest},
+        agreement::{
+            AgreementActionRequest, AgreementDetailResponse, AgreementSummary,
+            CreateAgreementRequest, OnChainStatusResponse,
+        },
         agreement_status::{AgreementAction, AgreementStatus},
         revision::{AgreementDiff, ProposeRevisionRequest},
     },
     repositories::agreement_repository,
+    services::blockchain_service,
 };
 
 pub async fn get_detail(pool: &PgPool, agreement_id: Uuid) -> Result<AgreementDetailResponse, AppError> {
@@ -40,6 +44,8 @@ pub async fn create(
     }
 
     let agreement_id = Uuid::new_v4();
+    let on_chain_id = blockchain_service::compute_on_chain_id(agreement_id);
+    let tx_hash = blockchain_service::generate_tx_hash("AGREEMENT_CREATED", agreement_id, 1);
 
     agreement_repository::create_agreement_with_version(
         pool,
@@ -50,6 +56,8 @@ pub async fn create(
         payload.description.as_deref(),
         payload.amount,
         payload.deadline,
+        Some(&on_chain_id),
+        Some(&tx_hash),
     )
     .await?;
 
@@ -83,8 +91,9 @@ pub async fn accept(
         .next_status(&AgreementAction::Accept)
         .map_err(|e| AppError::InvalidState(e.to_string()))?;
 
-    agreement_repository::update_status(pool, agreement_id, next_status).await?;
-    agreement_repository::create_event(pool, agreement_id, req.actor_id, "PARTICIPANT_ACCEPTED", None).await?;
+    let tx_hash = blockchain_service::generate_tx_hash("PARTICIPANT_ACCEPTED", agreement_id, agreement.current_version);
+    agreement_repository::update_status_and_tx(pool, agreement_id, next_status, Some(&tx_hash)).await?;
+    agreement_repository::create_event(pool, agreement_id, req.actor_id, "PARTICIPANT_ACCEPTED", None, Some(&tx_hash)).await?;
 
     get_detail(pool, agreement_id).await
 }
@@ -116,8 +125,9 @@ pub async fn reject(
         .next_status(&AgreementAction::Reject)
         .map_err(|e| AppError::InvalidState(e.to_string()))?;
 
-    agreement_repository::update_status(pool, agreement_id, next_status).await?;
-    agreement_repository::create_event(pool, agreement_id, req.actor_id, "PARTICIPANT_REJECTED", None).await?;
+    let tx_hash = blockchain_service::generate_tx_hash("PARTICIPANT_REJECTED", agreement_id, agreement.current_version);
+    agreement_repository::update_status_and_tx(pool, agreement_id, next_status, Some(&tx_hash)).await?;
+    agreement_repository::create_event(pool, agreement_id, req.actor_id, "PARTICIPANT_REJECTED", None, Some(&tx_hash)).await?;
 
     get_detail(pool, agreement_id).await
 }
@@ -147,6 +157,7 @@ pub async fn propose_revision(
     }
 
     let new_version = agreement.current_version + 1;
+    let tx_hash = blockchain_service::generate_tx_hash("REVISION_PROPOSED", agreement_id, new_version);
 
     agreement_repository::create_revision_version(
         pool,
@@ -157,6 +168,7 @@ pub async fn propose_revision(
         req.amount,
         req.deadline,
         req.actor_id,
+        Some(&tx_hash),
     )
     .await?;
 
@@ -185,7 +197,7 @@ pub async fn accept_revision(
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Version {} not found", version)))?;
 
-    // Mutual approval: the proposer cannot accept their own revision
+    // Mutual consent: the proposer cannot accept their own revision
     if req.actor_id == target_version.created_by {
         return Err(AppError::BadRequest(
             "Mutual consent required: You cannot accept your own proposed revision".to_string(),
@@ -197,7 +209,8 @@ pub async fn accept_revision(
         return Err(AppError::Unauthorized("Not a party to this agreement".to_string()));
     }
 
-    agreement_repository::accept_revision_version(pool, agreement_id, version, req.actor_id).await?;
+    let tx_hash = blockchain_service::generate_tx_hash("REVISION_ACCEPTED", agreement_id, version);
+    agreement_repository::accept_revision_version(pool, agreement_id, version, req.actor_id, Some(&tx_hash)).await?;
 
     get_detail(pool, agreement_id).await
 }
@@ -230,9 +243,10 @@ pub async fn reject_revision(
         ));
     }
 
-    agreement_repository::update_status(pool, agreement_id, AgreementStatus::Active).await?;
+    let tx_hash = blockchain_service::generate_tx_hash("REVISION_REJECTED", agreement_id, version);
+    agreement_repository::update_status_and_tx(pool, agreement_id, AgreementStatus::Active, Some(&tx_hash)).await?;
     let meta = serde_json::json!({ "rejected_version": version });
-    agreement_repository::create_event(pool, agreement_id, req.actor_id, "REVISION_REJECTED", Some(meta)).await?;
+    agreement_repository::create_event(pool, agreement_id, req.actor_id, "REVISION_REJECTED", Some(meta), Some(&tx_hash)).await?;
 
     get_detail(pool, agreement_id).await
 }
@@ -259,8 +273,9 @@ pub async fn request_completion(
         return Err(AppError::Unauthorized("Not a party to this agreement".to_string()));
     }
 
-    agreement_repository::update_status(pool, agreement_id, AgreementStatus::CompletionPending).await?;
-    agreement_repository::create_event(pool, agreement_id, req.actor_id, "COMPLETION_REQUESTED", None).await?;
+    let tx_hash = blockchain_service::generate_tx_hash("COMPLETION_REQUESTED", agreement_id, agreement.current_version);
+    agreement_repository::update_status_and_tx(pool, agreement_id, AgreementStatus::CompletionPending, Some(&tx_hash)).await?;
+    agreement_repository::create_event(pool, agreement_id, req.actor_id, "COMPLETION_REQUESTED", None, Some(&tx_hash)).await?;
 
     get_detail(pool, agreement_id).await
 }
@@ -287,8 +302,9 @@ pub async fn confirm_completion(
         return Err(AppError::Unauthorized("Not a party to this agreement".to_string()));
     }
 
-    agreement_repository::update_status(pool, agreement_id, AgreementStatus::Completed).await?;
-    agreement_repository::create_event(pool, agreement_id, req.actor_id, "COMPLETION_CONFIRMED", None).await?;
+    let tx_hash = blockchain_service::generate_tx_hash("COMPLETION_CONFIRMED", agreement_id, agreement.current_version);
+    agreement_repository::update_status_and_tx(pool, agreement_id, AgreementStatus::Completed, Some(&tx_hash)).await?;
+    agreement_repository::create_event(pool, agreement_id, req.actor_id, "COMPLETION_CONFIRMED", None, Some(&tx_hash)).await?;
 
     get_detail(pool, agreement_id).await
 }
@@ -334,4 +350,27 @@ pub async fn list(pool: &PgPool, user_id: Option<Uuid>) -> Result<Vec<AgreementS
         None => agreement_repository::list_all(pool).await?,
     };
     Ok(list)
+}
+
+pub async fn get_on_chain_status(
+    pool: &PgPool,
+    agreement_id: Uuid,
+) -> Result<OnChainStatusResponse, AppError> {
+    let agreement = agreement_repository::find_by_id(pool, agreement_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("Agreement {} not found", agreement_id)))?;
+
+    let on_chain_id = agreement
+        .on_chain_id
+        .unwrap_or_else(|| blockchain_service::compute_on_chain_id(agreement_id));
+
+    let events = agreement_repository::find_all_events(pool, agreement_id).await?;
+
+    Ok(blockchain_service::build_on_chain_status(
+        agreement_id,
+        &on_chain_id,
+        agreement.current_version,
+        &agreement.status,
+        &events,
+    ))
 }

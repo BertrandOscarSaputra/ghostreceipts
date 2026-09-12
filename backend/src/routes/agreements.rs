@@ -30,4 +30,5 @@ pub fn router() -> Router<AppState> {
             post(agreements::confirm_completion),
         )
         .route("/agreements/{id}/diff", get(agreements::get_diff))
+        .route("/agreements/{id}/onchain", get(agreements::get_on_chain_status))
 }

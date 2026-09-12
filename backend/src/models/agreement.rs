@@ -11,6 +11,8 @@ pub struct Agreement {
     pub participant_id: Uuid,
     pub status: String,
     pub current_version: i32,
+    pub on_chain_id: Option<String>,
+    pub on_chain_tx_hash: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -41,6 +43,7 @@ pub struct AgreementEvent {
     pub actor_id: Uuid,
     pub event_type: String,
     pub metadata: Option<serde_json::Value>,
+    pub tx_hash: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -84,5 +87,24 @@ pub struct AgreementSummary {
 #[derive(Debug, Deserialize)]
 pub struct ListAgreementsQuery {
     pub user_id: Option<Uuid>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OnChainStatusResponse {
+    pub agreement_id: Uuid,
+    pub on_chain_id: String,
+    pub current_version: i32,
+    pub status: String,
+    pub contract_address: String,
+    pub network: String,
+    pub explorer_url: String,
+    pub transactions: Vec<OnChainTxSummary>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OnChainTxSummary {
+    pub event_type: String,
+    pub tx_hash: String,
+    pub timestamp: DateTime<Utc>,
 }
 

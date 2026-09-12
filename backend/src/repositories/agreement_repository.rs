@@ -9,7 +9,7 @@ use crate::models::{
 pub async fn find_by_id(pool: &PgPool, id: Uuid) -> Result<Option<Agreement>, sqlx::Error> {
     sqlx::query_as::<_, Agreement>(
         r#"
-        SELECT id, creator_id, participant_id, status, current_version, created_at, updated_at
+        SELECT id, creator_id, participant_id, status, current_version, on_chain_id, on_chain_tx_hash, created_at, updated_at
         FROM agreements
         WHERE id = $1
         "#,
@@ -60,7 +60,7 @@ pub async fn find_all_events(
 ) -> Result<Vec<AgreementEvent>, sqlx::Error> {
     sqlx::query_as::<_, AgreementEvent>(
         r#"
-        SELECT id, agreement_id, actor_id, event_type, metadata, created_at
+        SELECT id, agreement_id, actor_id, event_type, metadata, tx_hash, created_at
         FROM agreement_events
         WHERE agreement_id = $1
         ORDER BY created_at ASC
@@ -80,19 +80,23 @@ pub async fn create_agreement_with_version(
     description: Option<&str>,
     amount: Option<i64>,
     deadline: Option<chrono::DateTime<chrono::Utc>>,
+    on_chain_id: Option<&str>,
+    tx_hash: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
 
     sqlx::query(
         r#"
-        INSERT INTO agreements (id, creator_id, participant_id, status, current_version)
-        VALUES ($1, $2, $3, $4, 1)
+        INSERT INTO agreements (id, creator_id, participant_id, status, current_version, on_chain_id, on_chain_tx_hash)
+        VALUES ($1, $2, $3, $4, 1, $5, $6)
         "#,
     )
     .bind(agreement_id)
     .bind(creator_id)
     .bind(participant_id)
     .bind(AgreementStatus::Pending.as_str())
+    .bind(on_chain_id)
+    .bind(tx_hash)
     .execute(&mut *tx)
     .await?;
 
@@ -116,13 +120,14 @@ pub async fn create_agreement_with_version(
     let event_id = Uuid::new_v4();
     sqlx::query(
         r#"
-        INSERT INTO agreement_events (id, agreement_id, actor_id, event_type, metadata)
-        VALUES ($1, $2, $3, 'AGREEMENT_CREATED', NULL)
+        INSERT INTO agreement_events (id, agreement_id, actor_id, event_type, metadata, tx_hash)
+        VALUES ($1, $2, $3, 'AGREEMENT_CREATED', NULL, $4)
         "#,
     )
     .bind(event_id)
     .bind(agreement_id)
     .bind(creator_id)
+    .bind(tx_hash)
     .execute(&mut *tx)
     .await?;
 
@@ -130,19 +135,30 @@ pub async fn create_agreement_with_version(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub async fn update_status(
     pool: &PgPool,
     agreement_id: Uuid,
     status: AgreementStatus,
 ) -> Result<(), sqlx::Error> {
+    update_status_and_tx(pool, agreement_id, status, None).await
+}
+
+pub async fn update_status_and_tx(
+    pool: &PgPool,
+    agreement_id: Uuid,
+    status: AgreementStatus,
+    tx_hash: Option<&str>,
+) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
         UPDATE agreements
-        SET status = $1, updated_at = NOW()
-        WHERE id = $2
+        SET status = $1, on_chain_tx_hash = COALESCE($2, on_chain_tx_hash), updated_at = NOW()
+        WHERE id = $3
         "#,
     )
     .bind(status.as_str())
+    .bind(tx_hash)
     .bind(agreement_id)
     .execute(pool)
     .await?;
@@ -158,6 +174,7 @@ pub async fn create_revision_version(
     amount: Option<i64>,
     deadline: Option<chrono::DateTime<chrono::Utc>>,
     actor_id: Uuid,
+    tx_hash: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
 
@@ -182,11 +199,12 @@ pub async fn create_revision_version(
     sqlx::query(
         r#"
         UPDATE agreements
-        SET status = $1, updated_at = NOW()
-        WHERE id = $2
+        SET status = $1, on_chain_tx_hash = COALESCE($2, on_chain_tx_hash), updated_at = NOW()
+        WHERE id = $3
         "#,
     )
     .bind(AgreementStatus::RevisionPending.as_str())
+    .bind(tx_hash)
     .bind(agreement_id)
     .execute(&mut *tx)
     .await?;
@@ -195,14 +213,15 @@ pub async fn create_revision_version(
     let meta = serde_json::json!({ "version": new_version_number });
     sqlx::query(
         r#"
-        INSERT INTO agreement_events (id, agreement_id, actor_id, event_type, metadata)
-        VALUES ($1, $2, $3, 'REVISION_PROPOSED', $4)
+        INSERT INTO agreement_events (id, agreement_id, actor_id, event_type, metadata, tx_hash)
+        VALUES ($1, $2, $3, 'REVISION_PROPOSED', $4, $5)
         "#,
     )
     .bind(event_id)
     .bind(agreement_id)
     .bind(actor_id)
     .bind(meta)
+    .bind(tx_hash)
     .execute(&mut *tx)
     .await?;
 
@@ -215,18 +234,20 @@ pub async fn accept_revision_version(
     agreement_id: Uuid,
     new_version_number: i32,
     actor_id: Uuid,
+    tx_hash: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
 
     sqlx::query(
         r#"
         UPDATE agreements
-        SET status = $1, current_version = $2, updated_at = NOW()
-        WHERE id = $3
+        SET status = $1, current_version = $2, on_chain_tx_hash = COALESCE($3, on_chain_tx_hash), updated_at = NOW()
+        WHERE id = $4
         "#,
     )
     .bind(AgreementStatus::Active.as_str())
     .bind(new_version_number)
+    .bind(tx_hash)
     .bind(agreement_id)
     .execute(&mut *tx)
     .await?;
@@ -235,14 +256,15 @@ pub async fn accept_revision_version(
     let meta = serde_json::json!({ "version": new_version_number });
     sqlx::query(
         r#"
-        INSERT INTO agreement_events (id, agreement_id, actor_id, event_type, metadata)
-        VALUES ($1, $2, $3, 'REVISION_ACCEPTED', $4)
+        INSERT INTO agreement_events (id, agreement_id, actor_id, event_type, metadata, tx_hash)
+        VALUES ($1, $2, $3, 'REVISION_ACCEPTED', $4, $5)
         "#,
     )
     .bind(event_id)
     .bind(agreement_id)
     .bind(actor_id)
     .bind(meta)
+    .bind(tx_hash)
     .execute(&mut *tx)
     .await?;
 
@@ -256,12 +278,13 @@ pub async fn create_event(
     actor_id: Uuid,
     event_type: &str,
     metadata: Option<serde_json::Value>,
+    tx_hash: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     let event_id = Uuid::new_v4();
     sqlx::query(
         r#"
-        INSERT INTO agreement_events (id, agreement_id, actor_id, event_type, metadata)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO agreement_events (id, agreement_id, actor_id, event_type, metadata, tx_hash)
+        VALUES ($1, $2, $3, $4, $5, $6)
         "#,
     )
     .bind(event_id)
@@ -269,6 +292,7 @@ pub async fn create_event(
     .bind(actor_id)
     .bind(event_type)
     .bind(metadata)
+    .bind(tx_hash)
     .execute(pool)
     .await?;
     Ok(())
